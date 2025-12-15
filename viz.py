@@ -6,7 +6,9 @@ import os
 from optimiser import f, grad, run
 
 
-def viz(start=(4, 2), lr=0.1, steps=50, optimizers=["sgd", "momentum", "rmsprop"]):
+def viz(
+    start=(4, 2), lr=0.1, steps=50, optimizers=["sgd", "momentum", "rmsprop", "adam"]
+):
     os.makedirs("viz", exist_ok=True)
 
     paths = {opt: run(start, opt, lr, steps) for opt in optimizers}
