@@ -2,12 +2,23 @@
 import numpy as np
 
 
-def f(w):
+def f_simple(w):
     return w[0] ** 2 + 10 * w[1] ** 2
 
 
-def grad(w):
+def grad_simple(w):
     return np.array([2 * w[0], 20 * w[1]])
+
+
+# Rosenbrock (banana valley)
+def f_rosenbrock(w, a=1, b=100):
+    return (a - w[0]) ** 2 + b * (w[1] - w[0] ** 2) ** 2
+
+
+def grad_rosenbrock(w, a=1, b=100):
+    dw1 = -2 * (a - w[0]) - 400 * w[0] * (w[1] - w[0] ** 2)
+    dw2 = 200 * (w[1] - w[0] ** 2)
+    return np.array([dw1, dw2])
 
 
 def sgd(w, g, state, lr):
@@ -43,12 +54,20 @@ def adam(w, g, state, lr, beta1=0.9, beta2=0.999, eps=1e-8):
     return w_new, (m, v, t)
 
 
-def run(start, opt="sgd", lr=0.1, steps=50, **kwargs):
+def run(start, opt="sgd", lr=0.01, steps=50, loss_fn="simple", **kwargs):
     w, path, state = np.array(start, float), [np.array(start, float)], None
     opt_fn = {"sgd": sgd, "momentum": momentum, "rmsprop": rmsprop, "adam": adam}[opt]
 
+    # Select loss function
+    if loss_fn == "simple":
+        grad_fn = grad_simple
+    elif loss_fn == "rosenbrock":
+        grad_fn = grad_rosenbrock
+    else:
+        raise ValueError(f"Unknown loss function: {loss_fn}")
+
     for _ in range(steps):
-        g = grad(w)
+        g = grad_fn(w)
         w, state = opt_fn(w, g, state, lr, **kwargs)
         path.append(w.copy())
     return np.array(path)
