@@ -1,4 +1,4 @@
-# train_cifar.py
+# train_cifar.py - COMMIT 1: Add data augmentation
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,12 +30,31 @@ class CNN(nn.Module):
         return self.fc2(x)
 
 
-def get_data(bs=256):
-    t = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5,) * 3, (0.5,) * 3)]
+def get_data(bs=256, augment=True):
+    normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+
+    if augment:
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
+    else:
+        train_transform = transforms.Compose([transforms.ToTensor(), normalize])
+
+    test_transform = transforms.Compose([transforms.ToTensor(), normalize])
+
+    train = datasets.CIFAR10(
+        "./data", train=True, download=True, transform=train_transform
     )
-    train = datasets.CIFAR10("./data", train=True, download=True, transform=t)
-    test = datasets.CIFAR10("./data", train=False, download=True, transform=t)
+    test = datasets.CIFAR10(
+        "./data", train=False, download=True, transform=test_transform
+    )
+
     return DataLoader(train, bs, shuffle=True, num_workers=4), DataLoader(
         test, bs, num_workers=4
     )
@@ -78,13 +97,13 @@ def test_epoch(model, loader, crit, device):
     return loss_sum / len(loader), 100 * correct / total
 
 
-def train(opt_name, lr=0.001, epochs=20, device="cuda", seed=42):
+def train(opt_name, lr=0.001, epochs=50, device="cuda", seed=42, augment=True):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     model = CNN().to(device)
     opt = CustomOptimizer(model.parameters(), opt_type=opt_name, lr=lr)
     crit = nn.CrossEntropyLoss()
-    tr_loader, te_loader = get_data()
+    tr_loader, te_loader = get_data(augment=augment)
 
     hist = {
         "tr_loss": [],
@@ -94,7 +113,9 @@ def train(opt_name, lr=0.001, epochs=20, device="cuda", seed=42):
         "gnorm": [],
         "time": [],
     }
-    print(f"\n{opt_name.upper()} (lr={lr})")
+
+    aug_label = "w/ augment" if augment else "no augment"
+    print(f"\n{opt_name.upper()} (lr={lr}, {aug_label})")
 
     for ep in range(epochs):
         t0 = time.time()
@@ -109,73 +130,59 @@ def train(opt_name, lr=0.001, epochs=20, device="cuda", seed=42):
         hist["gnorm"].append(gn)
         hist["time"].append(et)
 
-        print(
-            f"Ep {ep+1:2d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | GN:{gn:.2f} | {et:.1f}s"
-        )
+        if (ep + 1) % 10 == 0 or ep == 0:
+            print(
+                f"Ep {ep+1:2d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | GN:{gn:.2f} | {et:.1f}s"
+            )
 
     return hist
 
 
-def plot(results, lr, epochs):
+def plot(results, title, filename):
     os.makedirs("viz", exist_ok=True)
-    fig, ax = plt.subplots(2, 3, figsize=(15, 8))
-    cols = {"sgd": "r", "momentum": "b", "rmsprop": "g", "adam": "m"}
+    fig, ax = plt.subplots(2, 2, figsize=(12, 8))
 
-    for opt, h in results.items():
-        ax[0, 0].plot(h["te_loss"], label=opt.upper(), c=cols[opt], lw=2)
-        ax[0, 1].plot(h["te_acc"], label=opt.upper(), c=cols[opt], lw=2)
-        ax[0, 2].plot(h["gnorm"], label=opt.upper(), c=cols[opt], lw=2)
-        ax[1, 0].plot(h["time"], label=opt.upper(), c=cols[opt], lw=2)
+    for label, h in results.items():
+        ax[0, 0].plot(h["tr_loss"], label=label, lw=2)
+        ax[0, 1].plot(h["tr_acc"], label=label, lw=2)
+        ax[1, 0].plot(h["te_loss"], label=label, lw=2)
+        ax[1, 1].plot(h["te_acc"], label=label, lw=2)
 
-    # Convergence speed
-    conv = {
-        opt: next((i + 1 for i, a in enumerate(h["te_acc"]) if a >= 50), epochs)
-        for opt, h in results.items()
-    }
-    ax[1, 1].bar(conv.keys(), conv.values(), color=[cols[k] for k in conv])
-
-    # Final accuracy
-    final = {opt: h["te_acc"][-1] for opt, h in results.items()}
-    ax[1, 2].bar(final.keys(), final.values(), color=[cols[k] for k in final])
-
-    titles = [
-        "Test Loss",
-        "Test Acc (%)",
-        "Grad Norm",
-        "Epoch Time (s)",
-        "Epochs to 50%",
-        f"Final Acc (ep{epochs})",
-    ]
+    titles = ["Train Loss", "Train Acc (%)", "Test Loss", "Test Acc (%)"]
     for a, t in zip(ax.flat, titles):
         a.set_title(t, fontweight="bold")
-        if "bar" not in str(type(a.containers)):
-            a.legend()
-            a.grid(alpha=0.3)
+        a.legend()
+        a.grid(alpha=0.3)
+        a.set_xlabel("Epoch")
 
+    fig.suptitle(title, fontsize=14, fontweight="bold")
     plt.tight_layout()
-    plt.savefig(f"viz/cifar_lr{lr}_ep{epochs}.png", dpi=150)
+    plt.savefig(f"viz/{filename}.png", dpi=150)
     plt.close()
 
 
-def compare(opts=["sgd", "momentum", "rmsprop", "adam"], lr=0.001, epochs=20):
+def compare_augmentation(opt="adam", lr=0.001, epochs=50):
     device = "cuda"
-    print(f"\nCIFAR-10 | {torch.cuda.get_device_name(0)} | lr={lr} | epochs={epochs}")
+    print(f"\nCIFAR-10 Augmentation Comparison | {torch.cuda.get_device_name(0)}")
 
-    results = {opt: train(opt, lr, epochs, device) for opt in opts}
-    plot(results, lr, epochs)
+    results = {
+        "No Augment": train(opt, lr, epochs, device, augment=False),
+        "With Augment": train(opt, lr, epochs, device, augment=True),
+    }
 
-    os.makedirs("results", exist_ok=True)
-    with open(f"results/metrics.json", "w") as f:
-        json.dump(results, f, indent=2)
+    plot(
+        results, f"{opt.upper()} - Augmentation Comparison", f"augment_comparison_{opt}"
+    )
 
-    print(f"\n{'='*60}\nFINAL RESULTS\n{'='*60}")
-    for opt in opts:
-        acc = results[opt]["te_acc"][-1]
-        t = sum(results[opt]["time"])
-        print(f"{opt.upper():10s} {acc:6.2f}%  {t:6.1f}s")
+    print(f"FINAL RESULTS (Epoch {epochs})")
+    for label, h in results.items():
+        print(
+            f"{label:15s} Test Acc: {h['te_acc'][-1]:6.2f}%  (Best: {max(h['te_acc']):.2f}%)"
+        )
 
     return results
 
 
 if __name__ == "__main__":
-    compare(lr=0.001, epochs=20)
+    # First, demonstrate impact of augmentation
+    compare_augmentation(opt="adam", lr=0.001, epochs=50)
