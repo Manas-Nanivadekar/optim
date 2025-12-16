@@ -1,3 +1,4 @@
+# train_cifar_final.py - Production-ready CNN baseline
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,36 +15,39 @@ class CNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+
         self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+
         self.conv3 = nn.Conv2d(64, 64, 3, padding=1)
+        self.bn3 = nn.BatchNorm2d(64)
+
         self.pool = nn.MaxPool2d(2, 2)
         self.fc1 = nn.Linear(64 * 4 * 4, 64)
         self.fc2 = nn.Linear(64, 10)
 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))
+        x = self.pool(F.relu(self.bn3(self.conv3(x))))
         x = x.view(-1, 64 * 4 * 4)
         x = F.relu(self.fc1(x))
         return self.fc2(x)
 
 
-def get_data(bs=256, augment=True):
+def get_data(bs=256):
     normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
 
-    if augment:
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-                transforms.ToTensor(),
-                normalize,
-            ]
-        )
-    else:
-        train_transform = transforms.Compose([transforms.ToTensor(), normalize])
+    train_transform = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.ToTensor(),
+            normalize,
+        ]
+    )
 
     test_transform = transforms.Compose([transforms.ToTensor(), normalize])
 
@@ -59,28 +63,20 @@ def get_data(bs=256, augment=True):
     )
 
 
-def grad_norm(model):
-    return (
-        sum(p.grad.norm().item() ** 2 for p in model.parameters() if p.grad is not None)
-        ** 0.5
-    )
-
-
 def train_epoch(model, loader, opt, crit, device):
     model.train()
-    loss_sum, correct, total, gnorms = 0, 0, 0, []
+    loss_sum, correct, total = 0, 0, 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         opt.zero_grad()
         out = model(x)
         loss = crit(out, y)
         loss.backward()
-        gnorms.append(grad_norm(model))
         opt.step()
         loss_sum += loss.item()
         correct += out.argmax(1).eq(y).sum().item()
         total += y.size(0)
-    return loss_sum / len(loader), 100 * correct / total, sum(gnorms) / len(gnorms)
+    return loss_sum / len(loader), 100 * correct / total
 
 
 def test_epoch(model, loader, crit, device):
@@ -101,119 +97,115 @@ def adjust_lr(opt, epoch, milestones=[60, 120, 160], gamma=0.1, base_lr=0.1):
     for m in milestones:
         if epoch >= m:
             lr *= gamma
-
     opt.lr = lr
     return lr
 
 
-def train(opt_name, base_lr=0.1, epochs=200, device="cuda", seed=42, use_schedule=True):
+def save_checkpoint(model, opt, epoch, best_acc, path="checkpoints/best.pt"):
+    os.makedirs("checkpoints", exist_ok=True)
+    torch.save(
+        {"epoch": epoch, "model_state": model.state_dict(), "best_acc": best_acc}, path
+    )
+
+
+def train(opt_name="sgd", base_lr=0.1, epochs=200, device="cuda", seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
+
     model = CNN().to(device)
     opt = CustomOptimizer(model.parameters(), opt_type=opt_name, lr=base_lr)
     crit = nn.CrossEntropyLoss()
-    tr_loader, te_loader = get_data(augment=True)
+    tr_loader, te_loader = get_data()
 
-    hist = {
-        "tr_loss": [],
-        "tr_acc": [],
-        "te_loss": [],
-        "te_acc": [],
-        "gnorm": [],
-        "time": [],
-        "lr": [],
-    }
-
-    schedule_label = "w/ schedule" if use_schedule else "fixed LR"
-    print(f"\n{opt_name.upper()} (base_lr={base_lr}, {schedule_label})")
-
+    hist = {"tr_loss": [], "tr_acc": [], "te_loss": [], "te_acc": [], "lr": []}
     best_acc = 0
-    for ep in range(epochs):
-        if use_schedule:
-            current_lr = adjust_lr(opt, ep, base_lr=base_lr)
-        else:
-            current_lr = base_lr
 
-        t0 = time.time()
-        tr_loss, tr_acc, gn = train_epoch(model, tr_loader, opt, crit, device)
+    print(f"\n{'='*70}")
+    print(f"Training with BatchNorm | {opt_name.upper()}")
+    print(
+        f"Base LR: {base_lr} | Epochs: {epochs} | Device: {torch.cuda.get_device_name(0)}"
+    )
+    print(f"{'='*70}\n")
+
+    for ep in range(epochs):
+        current_lr = adjust_lr(opt, ep, base_lr=base_lr)
+
+        tr_loss, tr_acc = train_epoch(model, tr_loader, opt, crit, device)
         te_loss, te_acc = test_epoch(model, te_loader, crit, device)
-        et = time.time() - t0
 
         hist["tr_loss"].append(tr_loss)
         hist["tr_acc"].append(tr_acc)
         hist["te_loss"].append(te_loss)
         hist["te_acc"].append(te_acc)
-        hist["gnorm"].append(gn)
-        hist["time"].append(et)
         hist["lr"].append(current_lr)
 
         if te_acc > best_acc:
             best_acc = te_acc
+            save_checkpoint(model, opt, ep, best_acc)
 
         if (ep + 1) % 20 == 0 or ep == 0:
             print(
-                f"Ep {ep+1:3d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | LR:{current_lr:.4f} | Best:{best_acc:.1f}%"
+                f"Ep {ep+1:3d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | LR:{current_lr:.4f} | Best:{best_acc:.2f}%"
             )
 
+    print(f"\n{'='*70}")
     print(f"Final: Test {te_acc:.2f}% | Best: {best_acc:.2f}%")
-    return hist
+    print(f"{'='*70}\n")
+
+    # Save results
+    os.makedirs("results", exist_ok=True)
+    with open(f"results/cnn_final_{opt_name}.json", "w") as f:
+        json.dump(hist, f, indent=2)
+
+    return hist, best_acc
 
 
-def plot(results, title, filename):
+def plot_results(hist, opt_name, best_acc):
     os.makedirs("viz", exist_ok=True)
-    fig, ax = plt.subplots(2, 3, figsize=(15, 8))
+    fig, ax = plt.subplots(2, 2, figsize=(12, 8))
 
-    for label, h in results.items():
-        ax[0, 0].plot(h["tr_loss"], label=label, lw=2)
-        ax[0, 1].plot(h["tr_acc"], label=label, lw=2)
-        ax[0, 2].plot(h["te_acc"], label=label, lw=2)
-        ax[1, 0].plot(h["te_loss"], label=label, lw=2)
-        ax[1, 1].plot(h["gnorm"], label=label, lw=2)
-        ax[1, 2].plot(h["lr"], label=label, lw=2)
+    ax[0, 0].plot(hist["tr_loss"], "b-", lw=2, label="Train")
+    ax[0, 0].plot(hist["te_loss"], "r-", lw=2, label="Test")
+    ax[0, 0].set_title("Loss", fontweight="bold")
+    ax[0, 0].legend()
+    ax[0, 0].grid(alpha=0.3)
+    ax[0, 0].set_xlabel("Epoch")
 
-    titles = [
-        "Train Loss",
-        "Train Acc (%)",
-        "Test Acc (%)",
-        "Test Loss",
-        "Grad Norm",
-        "Learning Rate",
-    ]
-    for a, t in zip(ax.flat, titles):
-        a.set_title(t, fontweight="bold")
-        a.legend()
-        a.grid(alpha=0.3)
-        a.set_xlabel("Epoch")
+    ax[0, 1].plot(hist["tr_acc"], "b-", lw=2, label="Train")
+    ax[0, 1].plot(hist["te_acc"], "r-", lw=2, label="Test")
+    ax[0, 1].set_title("Accuracy (%)", fontweight="bold")
+    ax[0, 1].legend()
+    ax[0, 1].grid(alpha=0.3)
+    ax[0, 1].set_xlabel("Epoch")
 
-    fig.suptitle(title, fontsize=14, fontweight="bold")
+    ax[1, 0].plot(hist["lr"], "g-", lw=2)
+    ax[1, 0].set_title("Learning Rate", fontweight="bold")
+    ax[1, 0].grid(alpha=0.3)
+    ax[1, 0].set_xlabel("Epoch")
+    ax[1, 0].set_yscale("log")
+
+    ax[1, 1].axis("off")
+    summary = f"""
+    CNN with BatchNorm - {opt_name.upper()}
+    
+    Final Test Accuracy: {hist['te_acc'][-1]:.2f}%
+    Best Test Accuracy:  {best_acc:.2f}%
+    
+    Final Train Accuracy: {hist['tr_acc'][-1]:.2f}%
+    Train/Test Gap: {hist['tr_acc'][-1] - hist['te_acc'][-1]:.2f}%
+    
+    Total Epochs: {len(hist['tr_loss'])}
+    """
+    ax[1, 1].text(
+        0.1, 0.5, summary, fontsize=12, family="monospace", verticalalignment="center"
+    )
+
+    fig.suptitle(f"Baseline - {opt_name.upper()}", fontsize=14, fontweight="bold")
     plt.tight_layout()
-    plt.savefig(f"viz/{filename}.png", dpi=150)
+    plt.savefig(f"viz/cnn_final_{opt_name}.png", dpi=150)
     plt.close()
 
 
-def compare_schedule(opt="sgd", base_lr=0.1, epochs=200):
-    device = "cuda"
-    print(f"\nCIFAR-10 LR Scheduling | {torch.cuda.get_device_name(0)}")
-
-    results = {
-        "Fixed LR": train(opt, base_lr, epochs, device, use_schedule=False),
-        "Scheduled LR": train(opt, base_lr, epochs, device, use_schedule=True),
-    }
-
-    plot(
-        results,
-        f"{opt.upper()} - LR Scheduling Comparison",
-        f"schedule_comparison_{opt}",
-    )
-
-    print(f"Final Result (Epoch {epochs})")
-    for label, h in results.items():
-        print(
-            f"{label:15s} Test Acc: {h['te_acc'][-1]:6.2f}%  (Best: {max(h['te_acc']):.2f}%)"
-        )
-
-    return results
-
-
 if __name__ == "__main__":
-    compare_schedule(opt="sgd", base_lr=0.1, epochs=200)
+    hist, best_acc = train(opt_name="sgd", base_lr=0.1, epochs=200)
+    plot_results(hist, "sgd", best_acc)
