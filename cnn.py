@@ -59,7 +59,7 @@ def train_epoch(model, loader, optimizer, criterion, device):
         optimizer.zero_grad()
         outputs = model(imgs)
         loss = criterion(outputs, labels)
-        loss.backwards()
+        loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
