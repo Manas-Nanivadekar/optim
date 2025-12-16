@@ -1,4 +1,3 @@
-# train_cifar.py - COMMIT 1: Add data augmentation
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -97,13 +96,23 @@ def test_epoch(model, loader, crit, device):
     return loss_sum / len(loader), 100 * correct / total
 
 
-def train(opt_name, lr=0.001, epochs=50, device="cuda", seed=42, augment=True):
+def adjust_lr(opt, epoch, milestones=[60, 120, 160], gamma=0.1, base_lr=0.1):
+    lr = base_lr
+    for m in milestones:
+        if epoch >= m:
+            lr *= gamma
+
+    opt.lr = lr
+    return lr
+
+
+def train(opt_name, base_lr=0.1, epochs=200, device="cuda", seed=42, use_schedule=True):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     model = CNN().to(device)
-    opt = CustomOptimizer(model.parameters(), opt_type=opt_name, lr=lr)
+    opt = CustomOptimizer(model.parameters(), opt_type=opt_name, lr=base_lr)
     crit = nn.CrossEntropyLoss()
-    tr_loader, te_loader = get_data(augment=augment)
+    tr_loader, te_loader = get_data(augment=True)
 
     hist = {
         "tr_loss": [],
@@ -112,12 +121,19 @@ def train(opt_name, lr=0.001, epochs=50, device="cuda", seed=42, augment=True):
         "te_acc": [],
         "gnorm": [],
         "time": [],
+        "lr": [],
     }
 
-    aug_label = "w/ augment" if augment else "no augment"
-    print(f"\n{opt_name.upper()} (lr={lr}, {aug_label})")
+    schedule_label = "w/ schedule" if use_schedule else "fixed LR"
+    print(f"\n{opt_name.upper()} (base_lr={base_lr}, {schedule_label})")
 
+    best_acc = 0
     for ep in range(epochs):
+        if use_schedule:
+            current_lr = adjust_lr(opt, ep, base_lr=base_lr)
+        else:
+            current_lr = base_lr
+
         t0 = time.time()
         tr_loss, tr_acc, gn = train_epoch(model, tr_loader, opt, crit, device)
         te_loss, te_acc = test_epoch(model, te_loader, crit, device)
@@ -129,26 +145,40 @@ def train(opt_name, lr=0.001, epochs=50, device="cuda", seed=42, augment=True):
         hist["te_acc"].append(te_acc)
         hist["gnorm"].append(gn)
         hist["time"].append(et)
+        hist["lr"].append(current_lr)
 
-        if (ep + 1) % 10 == 0 or ep == 0:
+        if te_acc > best_acc:
+            best_acc = te_acc
+
+        if (ep + 1) % 20 == 0 or ep == 0:
             print(
-                f"Ep {ep+1:2d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | GN:{gn:.2f} | {et:.1f}s"
+                f"Ep {ep+1:3d} | Tr:{tr_loss:.3f}({tr_acc:.1f}%) | Te:{te_loss:.3f}({te_acc:.1f}%) | LR:{current_lr:.4f} | Best:{best_acc:.1f}%"
             )
 
+    print(f"Final: Test {te_acc:.2f}% | Best: {best_acc:.2f}%")
     return hist
 
 
 def plot(results, title, filename):
     os.makedirs("viz", exist_ok=True)
-    fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+    fig, ax = plt.subplots(2, 3, figsize=(15, 8))
 
     for label, h in results.items():
         ax[0, 0].plot(h["tr_loss"], label=label, lw=2)
         ax[0, 1].plot(h["tr_acc"], label=label, lw=2)
+        ax[0, 2].plot(h["te_acc"], label=label, lw=2)
         ax[1, 0].plot(h["te_loss"], label=label, lw=2)
-        ax[1, 1].plot(h["te_acc"], label=label, lw=2)
+        ax[1, 1].plot(h["gnorm"], label=label, lw=2)
+        ax[1, 2].plot(h["lr"], label=label, lw=2)
 
-    titles = ["Train Loss", "Train Acc (%)", "Test Loss", "Test Acc (%)"]
+    titles = [
+        "Train Loss",
+        "Train Acc (%)",
+        "Test Acc (%)",
+        "Test Loss",
+        "Grad Norm",
+        "Learning Rate",
+    ]
     for a, t in zip(ax.flat, titles):
         a.set_title(t, fontweight="bold")
         a.legend()
@@ -161,20 +191,22 @@ def plot(results, title, filename):
     plt.close()
 
 
-def compare_augmentation(opt="adam", lr=0.001, epochs=50):
+def compare_schedule(opt="sgd", base_lr=0.1, epochs=200):
     device = "cuda"
-    print(f"\nCIFAR-10 Augmentation Comparison | {torch.cuda.get_device_name(0)}")
+    print(f"\nCIFAR-10 LR Scheduling | {torch.cuda.get_device_name(0)}")
 
     results = {
-        "No Augment": train(opt, lr, epochs, device, augment=False),
-        "With Augment": train(opt, lr, epochs, device, augment=True),
+        "Fixed LR": train(opt, base_lr, epochs, device, use_schedule=False),
+        "Scheduled LR": train(opt, base_lr, epochs, device, use_schedule=True),
     }
 
     plot(
-        results, f"{opt.upper()} - Augmentation Comparison", f"augment_comparison_{opt}"
+        results,
+        f"{opt.upper()} - LR Scheduling Comparison",
+        f"schedule_comparison_{opt}",
     )
 
-    print(f"FINAL RESULTS (Epoch {epochs})")
+    print(f"Final Result (Epoch {epochs})")
     for label, h in results.items():
         print(
             f"{label:15s} Test Acc: {h['te_acc'][-1]:6.2f}%  (Best: {max(h['te_acc']):.2f}%)"
@@ -184,5 +216,4 @@ def compare_augmentation(opt="adam", lr=0.001, epochs=50):
 
 
 if __name__ == "__main__":
-    # First, demonstrate impact of augmentation
-    compare_augmentation(opt="adam", lr=0.001, epochs=50)
+    compare_schedule(opt="sgd", base_lr=0.1, epochs=200)
