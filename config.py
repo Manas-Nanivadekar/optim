@@ -17,7 +17,7 @@ class Config:
 
     # Training
     epochs: int = 160
-    batch_size: int = 128
+    batch_size: int = 512
     warmup_epochs: int = 5
 
     # LR Schedule
@@ -55,16 +55,34 @@ class Config:
             self.experiment_name = f"{self.model}_{self.optimizer}_lr{self.base_lr}"
 
 
-# Predefined configurations for different experiments
 CONFIGS = {
     "cnn_baseline": Config(
-        model="cnn", base_lr=0.1, epochs=200, lr_milestones=[60, 120, 160]
+        model="cnn",
+        base_lr=0.1,
+        epochs=200,
+        lr_milestones=[60, 120, 160],
+        batch_size=256,
     ),
     "resnet20": Config(
-        model="resnet20", base_lr=0.1, epochs=160, lr_milestones=[80, 120]
+        model="resnet20",
+        base_lr=0.1,
+        epochs=160,
+        lr_milestones=[80, 120],
+        batch_size=512,
     ),
     "resnet32": Config(
-        model="resnet32", base_lr=0.1, epochs=160, lr_milestones=[80, 120]
+        model="resnet32",
+        base_lr=0.1,
+        epochs=160,
+        lr_milestones=[80, 120],
+        batch_size=512,
+    ),
+    "resnet56": Config(
+        model="resnet56",
+        base_lr=0.1,
+        epochs=160,
+        lr_milestones=[80, 120],
+        batch_size=512,
     ),
     "resnet20_adam": Config(
         model="resnet20",
@@ -72,6 +90,7 @@ CONFIGS = {
         base_lr=0.001,
         epochs=160,
         lr_milestones=[80, 120],
+        batch_size=512,
     ),
 }
 
