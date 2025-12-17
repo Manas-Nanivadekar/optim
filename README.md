@@ -1245,3 +1245,5 @@ Loss: L = (y - target)²
 
 This is backpropagation!
 ```
+
+> Explanations adapted from various deep learning resources and personal experience in training neural networks. Images and other textual elements are generated through AI assistance.
