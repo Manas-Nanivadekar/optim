@@ -149,7 +149,7 @@ class Trainer:
                 state = {
                     "epoch": epoch,
                     "model_state_dict": self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state,
+                    "optimizer_state_dict": self.optimizer.state_dict(),
                     "best_acc": self.best_acc,
                     "train_loss": train_loss,
                     "test_loss": test_loss,
